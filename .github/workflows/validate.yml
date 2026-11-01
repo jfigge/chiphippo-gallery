@@ -1,0 +1,59 @@
+name: Validate entries
+
+# Runs the Chip Hippo app's own gallery validator (scripts/build-gallery.mjs)
+# over entries/ on every push and pull request. No secrets, read-only: the
+# build is written to a scratch folder and thrown away.
+#
+# On a push to main, the app repository's site deploy is dispatched so the
+# gallery republishes. That needs a token able to start workflows there: a
+# fine-grained token on jfigge/chiphippo with "Actions: read and write",
+# stored here as the DEPLOY_DISPATCH_TOKEN secret. Without it the step is
+# skipped and the next push to the app repo republishes instead.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          path: gallery
+          persist-credentials: false
+
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: jfigge/chiphippo
+          path: app
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22"
+
+      - name: Validate every entry
+        run: |
+          node app/scripts/build-gallery.mjs --strict \
+            --entries gallery/entries \
+            --out "$RUNNER_TEMP/gallery"
+
+  republish:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch the site deploy
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::No DEPLOY_DISPATCH_TOKEN; the gallery republishes with the next site deploy."
+            exit 0
+          fi
+          gh workflow run deploy-site.yml --repo jfigge/chiphippo --ref main
